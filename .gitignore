@@ -4,3 +4,6 @@
 *.pyc
 *.pyo
 .idea
+build
+dist
+*.egg-info
