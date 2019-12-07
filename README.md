@@ -21,8 +21,8 @@ types may be any Python built-in type, user-defined class, or the specific value
 * `SeqSpec` is for defining a sequence where each element must conform to one specific TypeSpec. The number of value
   elements must be exactly equal to the number of specified types.
 * `DictSpec` is for defining mapping/dictionary types. Keys may be any specific value (such as a string). They also
-  may be any Spec, in which case the type keys are treated like a TypeSpec for all keys without a specific value match.
-  For both modes of key, the value may be any TypeSpec. Validating and canonicalizing cross-references within the
+  may be any type or Spec, in which case they are treated like a TypeSpec for all keys without a specific value match.
+  For both modes of key, the value may be any type or Spec. Validating and canonicalizing cross-references within the
   mapping is also supported (see below).
 
 Three additional classes are available for user consumption.
@@ -51,7 +51,7 @@ schema.check_value("world")  # "world" -- a valid enumerated value
 schema.check_value(5+6j)  # complex(5, 6) -- a valid enumerated value
 schema.check_value(None) # 17 -- default
 schema.check_value('')  # 17 -- by default, all falsey non-numeric non-bool values trigger default regardless of type
-                        #   Note: testing for whether or not the default should be used can be customized on any Spec
+                        #   Note: the test for whether or not to use the default can be customized
 
 # All of the following are invalid and an InvalidValueError would be raised upon making the call
 schema.check_value(4.2)  # float not a valid type
@@ -60,6 +60,8 @@ schema.check_value("foo")  # string not a valid type
 ```
 
 All Spec support the `check_value()` method. It's typically the only method you'll need.
+
+*More in-depth details of each Spec will appear in a future section/document.*
 
 
 ### Backend-Oriented Exception Messages
