@@ -477,12 +477,12 @@ class Reference(object):
     def __hash__(self):
         return self._hash
 
-    def evaluate(self, root_config, value):
+    def evaluate(self, mapping, value):
         if self._update:
-            if self._update[0](root_config, value):
-                value = self._update[1](root_config, value)
+            if self._update[0](mapping, value):
+                value = self._update[1](mapping, value)
         if self._test:
-            if not self._test[0](root_config, value):
+            if not self._test[0](mapping, value):
                 raise InvalidValueError(self._test[1])
         return value
 
@@ -635,7 +635,7 @@ class DictSpec(Spec):
             failure_messages.append(f'Keys {unhandled_keys} are unhandled; valid keys {self._keys_must_be}')
 
         if failure_messages:
-            raise InvalidValueError('Does not conform with dict spec', failure_messages)
+            raise InvalidValueError('Does not conform with dict schema', failure_messages)
 
         # handle any references
         failure_messages = []
