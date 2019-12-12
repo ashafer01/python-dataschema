@@ -463,20 +463,16 @@ ReferenceValidator = Callable[[dict, Any], bool]
 
 
 class Reference(object):
-    """Used as values in a dict passed in as `references` to DictSpec. This is not a part of the normal Spec
-    inheritance hierarchy.
-    """
+    """Used in `references` for DictSpec along with a key"""
 
     def __init__(self,
                  test: Optional[Tuple[ReferenceValidator, str]] = None,
-                 update: Optional[Tuple[ReferenceValidator, Callable[[dict, Any], Any]]] = None,
-                 optional: bool = False):
+                 update: Optional[Tuple[ReferenceValidator, Callable[[dict, Any], Any]]] = None):
         if not update and not test:
             raise BadSchemaError('At least one of update or test must be set')
         self._update = update
         self._test = test
-        self.optional = optional
-        self._hash = hash((Reference, test, update, optional))
+        self._hash = hash((Reference, test, update))
 
     def __hash__(self):
         return self._hash
@@ -486,7 +482,7 @@ class Reference(object):
             if self._update[0](root_config, value):
                 value = self._update[1](root_config, value)
         if self._test:
-            if self._test[0](root_config, value):
+            if not self._test[0](root_config, value):
                 raise InvalidValueError(self._test[1])
         return value
 
@@ -548,7 +544,6 @@ class DictSpec(Spec):
         if not schema and not value_key_specs and not type_key_specs:
             raise BadSchemaError('At least one of schema or value_key_specs/type_key_specs must be specified')
 
-        self.references = tuple(references)
         _all_keys = []
         if schema:
             if value_key_specs or type_key_specs:
@@ -556,33 +551,34 @@ class DictSpec(Spec):
             value_key_specs = []
             type_key_specs = []
             for key, spec in schema.items():
-                self._all_keys.append(key)
-                type_key = _not_a_type_key
+                try:
+                    hash(key)
+                except TypeError:
+                    raise BadSchemaError('DictSpec keys must be Hashable')
+                _all_keys.append(key)
                 try:
                     type_key = canonicalize_base_type(key)
                 except BadSchemaError:
-                    pass
-                spec = canonicalize_types(spec)
+                    type_key = _not_a_type_key
+                spec = canonicalize_base_type(spec)
                 if type_key is _not_a_type_key:
                     value_key_specs.append((key, spec))
                 else:
                     type_key_specs.append((type_key, spec))
-            self.value_key_specs = tuple(value_key_specs)
-            self.type_key_specs = tuple(type_key_specs)
         if type_key_specs:
-            self.type_key_specs = tuple(type_key_specs)
             for k, _ in type_key_specs:
                 _all_keys.append(k)
-        else:
-            self.type_key_specs = tuple()
         if value_key_specs:
-            self.value_key_specs = tuple(value_key_specs)
             for k, _ in value_key_specs:
                 _all_keys.append(k)
-        else:
-            self.type_key_specs = tuple()
-        _all_keys = tuple(_all_keys)
+
         self._keys_must_be = must_be_msg(_all_keys)
+        self.value_key_specs = tuple(value_key_specs)
+        self.type_key_specs = tuple(type_key_specs)
+        if references:
+            self.references = tuple(references)
+        else:
+            self.references = tuple()
 
         Spec.__init__(self, optional, default, is_unset, constraints)
         self._hash = hash((self._base_hash, DictSpec, self.type_key_specs, self.value_key_specs, self.references))
@@ -608,15 +604,15 @@ class DictSpec(Spec):
         # check for exact key matches
         for key, spec in self.value_key_specs:
             try:
-                value = mapping[key]
                 unhandled_keys.remove(key)
+                value = mapping[key]
                 c_mapping[key] = check_value_types(spec, value)
             except KeyError:
                 if isinstance(spec, Spec) and spec.optional:
                     d_value = spec.default()
                     c_mapping[key] = spec.check_value(d_value)
                 else:
-                    failure_messages.append(f'Missing required config key {repr(key)}')
+                    failure_messages.append(f'Missing required mapping key {repr(key)}')
             except InvalidValueError as e:
                 failure_messages.append(f'Invalid value for key {repr(key)}: {str(e)}')
 
@@ -647,14 +643,9 @@ class DictSpec(Spec):
             for key, ref_spec in self.references:
                 try:
                     value = c_mapping[key]
-                    c_mapping[key] = ref_spec.evaluate(mapping, value)
+                    c_mapping[key] = ref_spec.evaluate(c_mapping, value)
                 except InvalidValueError as e:
                     failure_messages.append(str(e))
-                except KeyError:
-                    if ref_spec.optional:
-                        pass
-                    else:
-                        failure_messages.append(f'Missing required reference key {repr(key)}')
 
         if failure_messages:
             raise InvalidValueError('Does not comply with dict reference spec', failure_messages)
