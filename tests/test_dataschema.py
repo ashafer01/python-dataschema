@@ -1,4 +1,4 @@
-import datschema
+import dataschema
 
 import unittest
 
@@ -19,21 +19,21 @@ typical_data_types = (
 class TestDataSchema(unittest.TestCase):
     def test_check_value_base_type(self):
         for simple_type, good_value, bad_value in typical_data_types:
-            with self.subTest(f'Test good value for simple type {dataschema.get_type_name(simple_type)}'):
+            with self.subTest(f'Test good value for simple type {dataschema.get_base_type_name(simple_type)}'):
                 c_value = dataschema.check_value_base_type(simple_type, good_value)
                 self.assertEqual(c_value, good_value, msg='Value was mutated')
-            with self.subTest(f'Test bad value for simple type {dataschema.get_type_name(simple_type)}'):
-                with self.assertRaises(dataschema.InvalidConfigError):
+            with self.subTest(f'Test bad value for simple type {dataschema.get_base_type_name(simple_type)}'):
+                with self.assertRaises(dataschema.BadSchemaError):
                     dataschema.check_value_base_type(simple_type, bad_value)
 
     def test_type_simple(self):
         for simple_type, good_value, bad_value in typical_data_types:
             t = dataschema.Type(simple_type)
-            with self.subTest(f'Test good value for simple type {dataschema.get_type_name(simple_type)}'):
+            with self.subTest(f'Test good value for simple type {dataschema.get_base_type_name(simple_type)}'):
                 c_value = t.check_value(good_value)
                 self.assertEqual(c_value, good_value, msg='Value was mutated')
-            with self.subTest(f'Test bad value for simple type {dataschema.get_type_name(simple_type)}'):
-                with self.assertRaises(dataschema.InvalidConfigError):
+            with self.subTest(f'Test bad value for simple type {dataschema.get_base_type_name(simple_type)}'):
+                with self.assertRaises(dataschema.BadSchemaError):
                     t.check_value(bad_value)
 
     def test_type_canonicalize(self):
@@ -43,12 +43,12 @@ class TestDataSchema(unittest.TestCase):
             self.assertEqual(c_value, 5)
 
         with self.subTest('Test canonicalize ValueError'):
-            with self.assertRaises(dataschema.InvalidConfigError):
+            with self.assertRaises(dataschema.BadSchemaError):
                 t = dataschema.Type(str, lambda s: int(s))
                 t.check_value("definitely not numeric")
 
         with self.subTest('Test canonicalize TypeError'):
-            with self.assertRaises(dataschema.InvalidConfigError):
+            with self.assertRaises(dataschema.BadSchemaError):
                 t = dataschema.Type(str, lambda s: s())
                 t.check_value("definitely not callable")
 
@@ -65,15 +65,15 @@ class TestDataSchema(unittest.TestCase):
 
     def test_type_invalid_default(self):
         with self.subTest('Type mismatch for default on Type'):
-            with self.assertRaises(dataschema.BadSpecError):
+            with self.assertRaises(dataschema.BadSchemaError):
                 dataschema.Type(str, default=5, optional=True)
 
         with self.subTest('Constraint failure for default on Type'):
-            with self.assertRaises(dataschema.BadSpecError):
+            with self.assertRaises(dataschema.BadSchemaError):
                 dataschema.Type(str,
-                              default='foo',
-                              constraints=(lambda v: v.startswith('x'), 'Must start with x'),
-                              optional=True)
+                                default='foo',
+                                constraints=(lambda v: v.startswith('x'), 'Must start with x'),
+                                optional=True)
 
     def test_type_callable_default(self):
         t = dataschema.Type(dict, default=dict, optional=True)
