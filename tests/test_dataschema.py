@@ -23,7 +23,7 @@ class TestDataSchema(unittest.TestCase):
                 c_value = dataschema.check_value_base_type(simple_type, good_value)
                 self.assertEqual(c_value, good_value, msg='Value was mutated')
             with self.subTest(f'Test bad value for simple type {dataschema.get_base_type_name(simple_type)}'):
-                with self.assertRaises(dataschema.BadSchemaError):
+                with self.assertRaises(dataschema.InvalidValueError):
                     dataschema.check_value_base_type(simple_type, bad_value)
 
     def test_type_simple(self):
@@ -33,7 +33,7 @@ class TestDataSchema(unittest.TestCase):
                 c_value = t.check_value(good_value)
                 self.assertEqual(c_value, good_value, msg='Value was mutated')
             with self.subTest(f'Test bad value for simple type {dataschema.get_base_type_name(simple_type)}'):
-                with self.assertRaises(dataschema.BadSchemaError):
+                with self.assertRaises(dataschema.InvalidValueError):
                     t.check_value(bad_value)
 
     def test_type_canonicalize(self):
@@ -43,12 +43,12 @@ class TestDataSchema(unittest.TestCase):
             self.assertEqual(c_value, 5)
 
         with self.subTest('Test canonicalize ValueError'):
-            with self.assertRaises(dataschema.BadSchemaError):
+            with self.assertRaises(dataschema.InvalidValueError):
                 t = dataschema.Type(str, lambda s: int(s))
                 t.check_value("definitely not numeric")
 
         with self.subTest('Test canonicalize TypeError'):
-            with self.assertRaises(dataschema.BadSchemaError):
+            with self.assertRaises(dataschema.InvalidValueError):
                 t = dataschema.Type(str, lambda s: s())
                 t.check_value("definitely not callable")
 
@@ -85,8 +85,8 @@ class TestDataSchema(unittest.TestCase):
 
     def test_type_spec(self):
         t = dataschema.TypeSpec(types=(int, dataschema.Type(str, lambda s: 5), None),
-                              default=5,
-                              constraints=(lambda v: v == 5, 'Must be 5'))
+                                default=5,
+                                constraints=(lambda v: v == 5, 'Must be 5'))
         valid_5s = (5, "fifty seven", None, "")
         for five in valid_5s:
             with self.subTest(f'Test good value {repr(five)}'):
@@ -96,7 +96,7 @@ class TestDataSchema(unittest.TestCase):
         not_valid_5s = (17, True)
         for not_five in not_valid_5s:
             with self.subTest(f'Test bad value {repr(not_five)}'):
-                with self.assertRaises(dataschema.InvalidConfigError):
+                with self.assertRaises(dataschema.InvalidValueError):
                     t.check_value(not_five)
 
         t = dataschema.TypeSpec(types=tuple([i[0] for i in typical_data_types]))
@@ -107,7 +107,7 @@ class TestDataSchema(unittest.TestCase):
 
         bad_value = complex(4, 5)
         with self.subTest(f'Test bad value with wide union {repr(bad_value)}'):
-            with self.assertRaises(dataschema.InvalidConfigError):
+            with self.assertRaises(dataschema.InvalidValueError):
                 t.check_value(bad_value)
 
     def test_enum_spec(self):
@@ -123,5 +123,5 @@ class TestDataSchema(unittest.TestCase):
 
         for v in bad_values:
             with self.subTest(f'Check bad enum value {repr(v)}'):
-                with self.assertRaises(dataschema.InvalidConfigError):
+                with self.assertRaises(dataschema.InvalidValueError):
                     t.check_value(v)
