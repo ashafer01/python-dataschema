@@ -674,7 +674,7 @@ class DictSpec(Spec):
             try:
                 unhandled_keys.remove(key)
                 value = mapping[key]
-                c_mapping[key] = check_value_types(spec, value)
+                c_mapping[key] = check_value_base_type(spec, value)
             except KeyError:
                 if isinstance(spec, Spec) and spec.optional:
                     d_value = spec.default()
