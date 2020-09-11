@@ -1,11 +1,6 @@
-import jsonpatch
 import typing
-import yaml
 from collections import abc
 from typing import Optional, Dict, Tuple, Callable, Any, Union, Iterable, Hashable, Sequence, Collection
-from urllib.error import URLError
-from urllib.request import urlopen
-from yaml.parser import ParserError as YAMLParserError
 
 
 def indent_msg_lines(messages: Iterable[str]):
@@ -543,8 +538,6 @@ class DictSpec(Spec):
                  schema: Optional[Dict[Hashable, Types]] = None,
                  value_key_specs: SequenceSchema = None,
                  type_key_specs: SequenceSchema = None,
-                 include_key: Optional[str] = '_Include',
-                 patch_key: Optional[str] = '_Patch',
                  references: Optional[Sequence[Tuple[Hashable, Reference]]] = None,
                  optional: bool = False,
                  default: Any = dict,
@@ -553,11 +546,6 @@ class DictSpec(Spec):
 
         if not schema and not value_key_specs and not type_key_specs:
             raise BadSchemaError('At least one of schema or value_key_specs/type_key_specs must be specified')
-
-        self.include_key = include_key
-        self.patch_key = patch_key
-
-        self.include_patch_schema = IterSpec(str, optional=True, default=list)
 
         _all_keys = []
         if schema:
@@ -602,68 +590,15 @@ class DictSpec(Spec):
         kwds.setdefault('type_key_specs', self.type_key_specs)
         kwds.setdefault('value_key_specs', self.value_key_specs)
         kwds.setdefault('references', self.references)
-        kwds.setdefault('include_key', self.include_key)
-        kwds.setdefault('patch_key', self.patch_key)
         self._set_default_kwds(kwds)
         return DictSpec(**kwds)
 
     def type_name(self) -> str:
         return 'dict'
 
-    def _process_include_patch(self, mapping, key, val_type, update):
-        if not key:
-            return
-        failure_messages = []
-        url_list = self.include_patch_schema.check_value(mapping.get(key))
-        for i, url in enumerate(url_list):
-            try:
-                with urlopen(url) as f:
-                    v = yaml.safe_load(f.read().decode('utf-8'))
-                    if not isinstance(v, val_type):
-                        failure_messages.append(f'Index {i} {repr(url)} invalid: Must parse to {val_type.__name__}')
-                        continue
-                    update(mapping, v)
-            except YAMLParserError as e:
-                msg = indent_msg_lines(str(e).split('\n'))
-                failure_messages.append(f'Index {i} {repr(url)} contents could not be parsed: {msg}')
-            except UnicodeDecodeError as e:
-                failure_messages.append(f'Index {i} {repr(url)} is not valid UTF-8: {str(e)}')
-            except URLError as e:
-                failure_messages.append(f'Index {i} {repr(url)} could not be opened: {str(e)}')
-        if failure_messages:
-            raise InvalidValueError(f'{key} Invalid', failure_messages)
-
-    def _apply_includes_patches(self, mapping):
-        failure_messages = []
-
-        try:
-            self._process_include_patch(
-                mapping,
-                self.include_key,
-                dict,
-                lambda m, v: m.update(v),
-            )
-        except InvalidValueError as e:
-            failure_messages.append(str(e))
-
-        try:
-            self._process_include_patch(
-                mapping,
-                self.patch_key,
-                list,
-                lambda m, v: jsonpatch.JsonPatch(v).apply(m, in_place=True),
-            )
-        except InvalidValueError as e:
-            failure_messages.append(str(e))
-
-        if failure_messages:
-            raise InvalidValueError('Includes/Patches are invalid', failure_messages)
-
     def _check_value_type(self, mapping):
         if not isinstance(mapping, dict):
             raise InvalidValueNoTypeMatch('Must be dict')
-
-        self._apply_includes_patches(mapping)
 
         failure_messages = []
         unhandled_keys = set(mapping.keys())
