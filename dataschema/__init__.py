@@ -43,13 +43,18 @@ Validator = Callable[[Any], bool]
 Constraint = Tuple[Validator, str]
 Constraints = Union[Constraint, Iterable[Constraint]]
 
-# types that can routinely be explicitly set to a falsey value and be meaningfully
-# different from False in the context of "data"
+# types that can routinely be explicitly set to a false value and be meaningfully
+# different from empty/unset in the context of "data"
 _explicitly_falsifiable = (int, float, complex, bool)
 
 
-def is_implicitly_falsey(value):
-    """Return True if a value is "implicitly" falsey, i.e. unlikely to be an explicit user-set falsey value"""
+def default_is_unset(value):
+    """Return True if a value is probably unset/empty, or functionally
+    equivalent to such
+
+    This is the default function used to decide if the default should be used
+    instead of the value under validation
+    """
     return not value and not isinstance(value, _explicitly_falsifiable)
 
 
@@ -70,7 +75,7 @@ class Spec(object):
     def __init__(self,
                  optional: bool,
                  default: Any = None,
-                 is_unset: Validator = is_implicitly_falsey,
+                 is_unset: Validator = default_is_unset,
                  constraints: Optional[Constraints] = None):
         self.optional = optional
         self._default = default
@@ -83,7 +88,7 @@ class Spec(object):
                 d_value = self.default()
                 self._check_value(d_value)
             except InvalidValueError as e:
-                raise BadSchemaError(f'Invalid schema, default value is spec-invalid: {str(e)}')
+                raise BadSchemaError(f'Invalid schema, default value is spec-invalid: {e!s}')
         self._hash = None
         self._base_hash = (optional, default, is_unset, constraints)
         self._base_kwds = (
@@ -117,7 +122,7 @@ class Spec(object):
         for c, message in self._constraints:
             result = c(value)
             if not result:
-                failure_messages.append(f'Constraint not met (return={repr(result)}): {message}')
+                failure_messages.append(f'Constraint not met (return={result!r}): {message}')
         if failure_messages:
             if len(self._constraints) == 1:
                 raise InvalidValueError(failure_messages[0])
@@ -166,7 +171,7 @@ def canonicalize_base_type(t):
     elif isinstance(t, dict):
         return DictSpec(t)
     else:
-        raise BadSchemaError(f'{repr(t)} is not a valid Type: must be type/bool/Spec/None/tuple/list/set/dict')
+        raise BadSchemaError(f'{t!r} is not a valid Type: must be type/bool/Spec/None/tuple/list/set/dict')
 
 
 def canonicalize_types(types):
@@ -222,7 +227,7 @@ def check_value_base_type(t: BaseType, value: Any):
         if value is t:
             return value
     else:
-        raise BadSchemaError(f'Invalid schema definition -- unknown type spec value {repr(t)}')
+        raise BadSchemaError(f'Invalid schema definition -- unknown type spec value {t!r}')
     raise InvalidValueNoTypeMatch(must_be_msg(t))
 
 
@@ -257,7 +262,7 @@ class Type(Spec):
                  canonicalize: Optional[Callable[[Any], Any]] = None,
                  optional: bool = False,
                  default: Any = None,
-                 is_unset: Validator = is_implicitly_falsey,
+                 is_unset: Validator = default_is_unset,
                  constraints: Optional[Constraints] = None):
         if not isinstance(t, SimpleType.__args__):
             raise BadSchemaError('Type may only be used with one of: type/True/False/None')
@@ -273,7 +278,7 @@ class Type(Spec):
             else:
                 return value
         except _canonicalization_invalidating_exceptions as e:
-            raise InvalidValueError(f'{e.__class__.__name__} during canonicalization: {str(e)}')
+            raise InvalidValueError(f'{e.__class__.__name__} during canonicalization: {e!s}')
 
     def _check_value_type(self, value):
         value = check_value_base_type(self.type, value)
@@ -338,7 +343,7 @@ class TypeSpec(Spec):
                  types: Types,
                  optional: bool = False,
                  default: Any = None,
-                 is_unset: Validator = is_implicitly_falsey,
+                 is_unset: Validator = default_is_unset,
                  constraints: Optional[Constraints] = None):
         types = canonicalize_types(types)
         if optional and None not in types:
