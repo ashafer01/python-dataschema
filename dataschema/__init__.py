@@ -1,156 +1,20 @@
 import typing
 from collections import abc
-from typing import Optional, Dict, Tuple, Callable, Any, Union, Iterable, Hashable, Sequence, Collection
+from typing import Optional, Mapping, Tuple, Callable, Any, Union, Iterable, Hashable, Sequence, Collection
 
-
-def indent_msg_lines(messages: Iterable[str]):
-    indented_lines = []
-    for m in messages:
-        indented_lines.append('\n   '.join(m.split('\n')))
-    return indented_lines
-
-
-class InvalidValueError(Exception):
-    """Base exception for any value that fails to validate or canonicalize"""
-    def __init__(self, msg: str, messages: Optional[Iterable[str]] = None):
-        if messages:
-            self.messages = messages
-            msg = msg + ':\n-- ' + '\n-- '.join(indent_msg_lines(messages))
-        else:
-            self.messages = [msg]
-        self.message = msg
-        self.error_count = len(self.messages)
-        Exception.__init__(self, msg)
-
-    def __str__(self):
-        return self.message
-
-
-class InvalidValueNoTypeMatch(InvalidValueError):
-    """Exception for when there is explicitly no type match -- mostly used internally
-
-    Users will typically only need to catch `InvalidValueError` (base of this class) and look at the message
-    """
-    pass
-
-
-class BadSchemaError(Exception):
-    pass
-
-
-Validator = Callable[[Any], bool]
-
-Constraint = Tuple[Validator, str]
-Constraints = Union[Constraint, Iterable[Constraint]]
-
-# types that can routinely be explicitly set to a false value and be meaningfully
-# different from empty/unset in the context of "data"
-_explicitly_falsifiable = (int, float, complex, bool)
-
-
-def default_is_unset(value):
-    """Return True if a value is probably unset/empty, or functionally
-    equivalent to such
-
-    This is the default function used to decide if the default should be used
-    instead of the value under validation
-    """
-    return not value and not isinstance(value, _explicitly_falsifiable)
-
-
-class Spec(object):
-    """Abstract base class for schema spec elements.
-
-    This defines all of the common features of all Spec:
-
-    `optional` A flag indicating whether or not the value is optional.
-    `default` The default value, or a callable returning the default value (callables are not passed any arguments)
-    `is_unset` A callable accepting a value under validation. If it returns True, the `default` will be used instead
-       of the candidate value.
-    `constraints` A single 2-tuple, or sequence of 2-tuples. The first tuple element must be a callable that returns a
-       falsey value if the constraint is not met. The second tuple element must be a string message to indicate the
-       nature of the failure.
-    """
-
-    def __init__(self,
-                 optional: bool,
-                 default: Any = None,
-                 is_unset: Validator = default_is_unset,
-                 constraints: Optional[Constraints] = None):
-        self.optional = optional
-        self._default = default
-        self._is_unset = is_unset
-        if constraints and not isinstance(constraints[0], tuple):
-            constraints = (constraints,)
-        self._constraints = constraints
-        if optional:
-            try:
-                d_value = self.default()
-                self._check_value(d_value)
-            except InvalidValueError as e:
-                raise BadSchemaError(f'Invalid schema, default value is spec-invalid: {e!s}')
-        self._hash = None
-        self._base_hash = (optional, default, is_unset, constraints)
-        self._base_kwds = (
-            ('optional', self.optional),
-            ('default', self._default),
-            ('is_unset', self._is_unset),
-            ('constraints', self._constraints),
-        )
-
-    def __hash__(self):
-        if self._hash is None:
-            raise RuntimeError('Programming error - class did not set self._hash')
-        return self._hash
-
-    def _set_default_kwds(self, kwds: dict):
-        for key, value in self._base_kwds:
-            kwds.setdefault(key, value)
-
-    def default(self):
-        if callable(self._default):
-            return self._default()
-        else:
-            return self._default
-
-    def check_constraints(self, value) -> None:
-        if not self._constraints:
-            return
-        if self._is_unset(value) and self.optional:
-            return
-        failure_messages = []
-        for c, message in self._constraints:
-            result = c(value)
-            if not result:
-                failure_messages.append(f'Constraint not met (return={result!r}): {message}')
-        if failure_messages:
-            if len(self._constraints) == 1:
-                raise InvalidValueError(failure_messages[0])
-            else:
-                raise InvalidValueError('Does not meet value constraints', failure_messages)
-
-    def _check_value(self, value):
-        c_value = self._check_value_type(value)
-        self.check_constraints(c_value)
-        return c_value
-
-    def check_value(self, value):
-        if self._is_unset(value) and self.optional:
-            value = self.default()
-        return self._check_value(value)
-
-    def __call__(self, **kwds):
-        return self.copy(**kwds)
-
-    def _check_value_type(self, value):
-        raise NotImplementedError()
-
-    def type_name(self) -> str:
-        raise NotImplementedError()
-
-    def copy(self, **kwds):
-        raise NotImplementedError()
-
+from .utils import (
+    repr_seq_str,
+    indent_msg_lines,
+    InvalidValueError,
+    InvalidValueNoTypeMatch,
+    BadSchemaError,
+)
+from .spec import (
+    Spec,
+    Validator,
+    Constraints,
+    default_is_unset,
+)
 
 SimpleType = Union[type, bool, type(None)]  # All types in this Union must also work with isinstance()
 BaseType = Union[SimpleType, Spec, list, set, dict]
@@ -160,7 +24,7 @@ Types = Union[BaseType, Tuple[BaseType, ...]]
 def canonicalize_base_type(t):
     """Return a Spec instance for list/set/dict/tuple and unmodified value for type/bool/Spec/None"""
 
-    if isinstance(t, (type, bool, Spec)) or t is None:
+    if isinstance(t, (Spec, *SimpleType.__args__)):
         return t
     elif isinstance(t, tuple):
         return TypeSpec(t)
@@ -185,7 +49,7 @@ def canonicalize_types(types):
     return tuple(c_types)
 
 
-def get_base_type_name(t: BaseType):
+def get_base_type_name(t: Any):
     """Get the string name for a canonicalized BaseType"""
     if isinstance(t, type):
         return t.__name__
@@ -195,14 +59,14 @@ def get_base_type_name(t: BaseType):
         return repr(t)
 
 
-def get_types_names(types: Types):
+def get_types_names(types: Any):
     """Get the string name for a canonicalized Types"""
     if not isinstance(types, tuple):
         return [get_base_type_name(types)]
     return [get_base_type_name(t) for t in types]
 
 
-def must_be_msg(types: Types):
+def must_be_msg(types: Any):
     """Obtain an exception message beginning with "Must be" for any Types"""
     if not isinstance(types, tuple):
         return 'Must be ' + get_base_type_name(types)
@@ -246,8 +110,7 @@ def check_value_types(types: Types, value: Any):
 
 
 # These get converted to an InvalidValueError when caught during canonicalization
-# All other exceptions will immediately propagate, including InvalidValueError, however an InvalidValueError from an
-# instance of Type is very likely to be caught and aggregated by a TypeSpec/IterSpec/DictSpec
+# All other exceptions will immediately propagate, including InvalidValueError
 _canonicalization_invalidating_exceptions = (ValueError, TypeError, AttributeError, KeyError)
 
 
@@ -258,15 +121,15 @@ class Type(Spec):
     """
 
     def __init__(self,
-                 t: SimpleType,
+                 base_type: SimpleType,
                  canonicalize: Optional[Callable[[Any], Any]] = None,
                  optional: bool = False,
                  default: Any = None,
                  is_unset: Validator = default_is_unset,
-                 constraints: Optional[Constraints] = None):
-        if not isinstance(t, SimpleType.__args__):
+                 constraints: Constraints = None):
+        if not isinstance(base_type, SimpleType.__args__):
             raise BadSchemaError('Type may only be used with one of: type/True/False/None')
-        self.type = t
+        self.base_type = base_type
         self._canonicalize = canonicalize
         Spec.__init__(self, optional, default, is_unset, constraints)
         self._hash = hash((self._base_hash, Type, t, canonicalize))
@@ -278,17 +141,17 @@ class Type(Spec):
             else:
                 return value
         except _canonicalization_invalidating_exceptions as e:
-            raise InvalidValueError(f'{e.__class__.__name__} during canonicalization: {e!s}')
+            raise InvalidValueError(f'{e.__class__.__name__} during canonicalization: {e}')
 
     def _check_value_type(self, value):
-        value = check_value_base_type(self.type, value)
+        value = check_value_base_type(self.base_type, value)
         return self.canonicalize(value)
 
     def type_name(self) -> str:
-        return get_base_type_name(self.type)
+        return get_base_type_name(self.base_type)
 
     def copy(self, **kwds):
-        kwds.setdefault('t', self.type)
+        kwds.setdefault('base_type', self.base_type)
         kwds.setdefault('canonicalize', self._canonicalize)
         self._set_default_kwds(kwds)
         return Type(**kwds)
@@ -304,7 +167,7 @@ class EnumSpec(Type):
     def __init__(self,
                  values: Iterable[Hashable],
                  canonicalize: Optional[Callable[[Any], Any]] = None,
-                 constraints: Optional[Constraints] = None,
+                 constraints: Constraints = None,
                  optional: bool = False,
                  is_unset: Validator = lambda value: not value,
                  default: Any = None):
@@ -314,21 +177,16 @@ class EnumSpec(Type):
         optional = None in values
         Type.__init__(self, None, canonicalize, optional, default, is_unset, constraints)
         self._hash = hash((self._hash, EnumSpec, self.values))
+        self._copy_kwds = ('values', 'canonicalize')
 
     def _check_value_type(self, value):
         if value in self.values:
             return self.canonicalize(value)
         else:
-            raise InvalidValueNoTypeMatch(f'Must match be {self.type_name()}')
+            raise InvalidValueNoTypeMatch(f'Must match {self.type_name()}')
 
     def type_name(self) -> str:
-        return 'enum=' + '/'.join([repr(v) for v in self.values])
-
-    def copy(self, **kwds):
-        kwds.setdefault('values', self.values)
-        kwds.setdefault('canonicalize', self._canonicalize)
-        self._set_default_kwds(kwds)
-        return EnumSpec(**kwds)
+        return 'enum=' + repr_seq_str(self.values, '/')
 
 
 class TypeSpec(Spec):
@@ -344,7 +202,7 @@ class TypeSpec(Spec):
                  optional: bool = False,
                  default: Any = None,
                  is_unset: Validator = default_is_unset,
-                 constraints: Optional[Constraints] = None):
+                 constraints: Constraints = None):
         types = canonicalize_types(types)
         if optional and None not in types:
             types = (*types, None)
@@ -352,17 +210,13 @@ class TypeSpec(Spec):
         self.types = types
         Spec.__init__(self, optional, default, is_unset, constraints)
         self._hash = hash((self._base_hash, TypeSpec, types))
+        self._copy_kwds = ('types',)
 
     def _check_value_type(self, value):
         return check_value_types(self.types, value)
 
     def type_name(self) -> str:
         return '/'.join(get_types_names(self.types))
-
-    def copy(self, **kwds):
-        kwds.setdefault('types', self.types)
-        self._set_default_kwds(kwds)
-        return TypeSpec(**kwds)
 
 
 BaseIterable = typing.Type[Union[Iterable, Collection]]
@@ -386,11 +240,12 @@ class IterSpec(Spec):
                  optional: bool = False,
                  default: Any = list,
                  is_unset: Validator = lambda value: not value,
-                 constraints: Optional[Constraints] = None):
+                 constraints: Constraints = None):
         self.types = canonicalize_types(types)
         self.c_type = c_type
         Spec.__init__(self, optional, default, is_unset, constraints)
         self._hash = hash((self._base_hash, IterSpec, c_type, types))
+        self._copy_kwds = ('types', 'c_type')
 
     def _check_value_type(self, value):
         if not isinstance(value, _runtime_iterable):
@@ -402,19 +257,13 @@ class IterSpec(Spec):
             try:
                 c_values.append(check_value_types(self.types, l_value))
             except InvalidValueError as e:
-                failure_messages.append(f'Index {i} is invalid: {str(e)}')
+                failure_messages.append(f'Index {i} is invalid: {e}')
         if failure_messages:
             raise InvalidValueError('Items do not conform with iterable spec', failure_messages)
         return self.c_type(c_values)
 
     def type_name(self) -> str:
         return self.c_type.__name__
-
-    def copy(self, **kwds):
-        kwds.setdefault('types', self.types)
-        kwds.setdefault('c_type', self.c_type)
-        self._set_default_kwds(kwds)
-        return IterSpec(**kwds)
 
 
 class SeqSpec(Spec):
@@ -426,22 +275,17 @@ class SeqSpec(Spec):
     Does not support variable-length sequences. `type_sequence` and a value under validation must have the same length.
     """
     def __init__(self,
-                 type_sequence: Sequence[Types],
+                 type_sequence: Sequence[BaseType],
                  c_type: BaseIterable = tuple,
                  optional: bool = False,
                  default: Any = list,
                  is_unset: Validator = lambda value: not value,
-                 constraints: Optional[Constraints] = None):
+                 constraints: Constraints = None):
         self.type_sequence = type_sequence
         self.c_type = c_type
         Spec.__init__(self, optional, default, is_unset, constraints)
         self._hash = hash((self._base_hash, SeqSpec, c_type, type_sequence))
-
-    def copy(self, **kwds):
-        kwds.setdefault('type_sequence', self.type_sequence)
-        kwds.setdefault('c_type', self.c_type)
-        self._set_default_kwds(kwds)
-        return SeqSpec(**kwds)
+        self._copy_kwds = ('type_sequence', 'c_type')
 
     def type_name(self):
         return 'sequence(' + ', '.join(get_types_names(self.type_sequence)) + ')'
@@ -468,14 +312,17 @@ class SeqSpec(Spec):
 
 
 ReferenceValidator = Callable[[dict, Any], bool]
+ReferenceUpdator = Callable[[dict, Any], Any]
+ReferenceTest = Optional[Tuple[ReferenceValidator, str]]
+ReferenceUpdate = Optional[Tuple[ReferenceValidator, ReferenceUpdator]]
 
 
-class Reference(object):
+class Reference:
     """Used in `references` for DictSpec along with a key"""
 
     def __init__(self,
-                 test: Optional[Tuple[ReferenceValidator, str]] = None,
-                 update: Optional[Tuple[ReferenceValidator, Callable[[dict, Any], Any]]] = None):
+                 test: ReferenceTest = None,
+                 update: ReferenceUpdate = None):
         if not update and not test:
             raise BadSchemaError('At least one of update or test must be set')
         self._update = update
@@ -495,25 +342,57 @@ class Reference(object):
         return value
 
 
-TypeKeySpecs = Iterable[Tuple[BaseType, Types]]
+class ConditionalDictSpec:
+    """For use only as a value within a DictSpec
 
+    Define an additional DictSpec to apply if the value under validation matches
+    one of a given set of values.
+    """
+    def __init__(self,
+                 value_condition_specs: Mapping[Hashable, Union[Mapping, DictSpec]],
+                 optional: bool = False,
+                 default: Any = None
+                 apply_default_spec: bool = False):
+        for key, dict_spec in value_condition_specs.items():
+            dict_spec = canonicalize_base_type(dict_spec)
+            if not isinstance(dict_spec, DictSpec):
+                raise BadSchemaError('value_condition_spec values must be DictSpec instances')
+            value_condition_specs[key] = dict_spec
+            if dict_spec.type_key_specs:
+                type_keys = repr_seq_str(dict_spec.type_key_specs, key=lambda i: i[0])
+                raise BadSchemaError('type keys {type_keys} are not allowed in ConditionalDictSpec sub-Specs')
+        if apply_default_spec:
+            try:
+                self.default_spec = value_condition_specs[default]
+            except KeyError:
+                raise BadSchemaError(f'default={default!r} does not exist in value_condition_specs and apply_default_spec=True')
+        else:
+            self.default_spec = None
+        self.value_condition_specs = value_condition_specs
+        self.optional = optional
+        self._default = default
+        self.apply_default_spec = apply_default_spec
 
-def check_type_key_spec(type_key_specs: TypeKeySpecs, key: Any, value: Any) -> Tuple[Any, Any]:
-    for type_key, spec in type_key_specs:
+    def default(self, checker):
+        if self.apply_default_spec:
+            checker.check_dict_spec(self.default_spec, unhandled_ok=True)
+        return self._default
+
+    def check_value(self, checker, value):
         try:
-            c_key = check_value_base_type(type_key, key)
-        except InvalidValueError:
-            continue
-        try:
-            c_value = check_value_types(spec, value)
-            return c_key, c_value
+            value_spec = self.value_condition_spec[value]
+            checker.check_dict_spec(value_spec, unhandled_ok=True)
+            return value
+        except KeyError:
+            raise InvalidValueError(must_be_msg(tuple(self.value_condition_specs.keys())))
         except InvalidValueError as e:
-            raise InvalidValueError(f'Value for key {repr(key)} does not conform with spec: {str(e)}')
-    raise InvalidValueNoTypeMatch('No match for dict type keys')
+            raise InvalidValueError(f'Does not conform with conditional spec for value {value!r}: {e}')
 
 
-SequenceSchema = Optional[Sequence[Tuple[Hashable, Types]]]
-_not_a_type_key = object()
+DictSpecValue = Union[Types, ConditionalDictSpec]
+DictSchema = Optional[Mapping[Hashable, DictSpecValue]]
+IterableSchema = Optional[Iterable[Tuple[Hashable, DictSpecValue]]]
+References = Optional[Iterable[Tuple[Hashable, Reference]]]
 
 
 class DictSpec(Spec):
@@ -540,122 +419,164 @@ class DictSpec(Spec):
     mapping key/value values must be canonicalized.
     """
     def __init__(self,
-                 schema: Optional[Dict[Hashable, Types]] = None,
-                 value_key_specs: SequenceSchema = None,
-                 type_key_specs: SequenceSchema = None,
-                 references: Optional[Sequence[Tuple[Hashable, Reference]]] = None,
+                 schema: DictSchema = None,
+                 value_key_specs: IterableSchema = None,
+                 type_key_specs: IterableSchema = None,
+                 references: References = None,
+                 name: str = 'dict',
                  optional: bool = False,
                  default: Any = dict,
                  is_unset: Validator = lambda value: not value,
-                 constraints: Optional[Constraints] = None):
+                 constraints: Constraints = None):
 
         if not schema and not value_key_specs and not type_key_specs:
-            raise BadSchemaError('At least one of schema or value_key_specs/type_key_specs must be specified')
+            raise BadSchemaError('One of schema or value_key_specs/type_key_specs must be specified')
 
-        _all_keys = []
         if schema:
             if value_key_specs or type_key_specs:
                 raise BadSchemaError('May not specify both schema and value_key_specs/type_key_specs')
-            value_key_specs = []
-            type_key_specs = []
-            for key, spec in schema.items():
-                try:
-                    hash(key)
-                except TypeError:
-                    raise BadSchemaError('DictSpec keys must be Hashable')
-                _all_keys.append(key)
-                try:
-                    type_key = canonicalize_base_type(key)
-                except BadSchemaError:
-                    type_key = _not_a_type_key
-                spec = canonicalize_base_type(spec)
-                if type_key is _not_a_type_key:
-                    value_key_specs.append((key, spec))
-                else:
-                    type_key_specs.append((type_key, spec))
-        if type_key_specs:
-            for k, _ in type_key_specs:
-                _all_keys.append(k)
-        if value_key_specs:
-            for k, _ in value_key_specs:
-                _all_keys.append(k)
+            value_key_specs, type_key_specs = self._dict_schema_to_sequences(schema)
 
-        self._keys_must_be = must_be_msg(_all_keys)
-        self.value_key_specs = tuple(value_key_specs)
-        self.type_key_specs = tuple(type_key_specs)
+        for _, spec in type_key_specs:
+            if isinstance(spec, ConditionalDictSpec):
+                raise BadSchemaError('type keys may not use ConditionalDictSpec')
+
+        if value_key_specs:
+            self.value_key_specs = tuple(value_key_specs)
+        else:
+            self.value_key_specs = tuple()
+        if type_key_specs:
+            self.type_key_specs = tuple(type_key_specs)
+        else:
+            self.type_key_specs = tuple()
         if references:
             self.references = tuple(references)
         else:
             self.references = tuple()
+        self.name = name
 
         Spec.__init__(self, optional, default, is_unset, constraints)
-        self._hash = hash((self._base_hash, DictSpec, self.type_key_specs, self.value_key_specs, self.references))
+        self._hash = hash((self._base_hash, DictSpec, self.type_key_specs, self.value_key_specs,
+                           self.references, self.name))
+        self._copy_kwds = (
+            'type_key_specs',
+            'value_key_specs',
+            'references',
+            'name',
+        )
 
-    def copy(self, **kwds):
-        kwds.setdefault('type_key_specs', self.type_key_specs)
-        kwds.setdefault('value_key_specs', self.value_key_specs)
-        kwds.setdefault('references', self.references)
-        self._set_default_kwds(kwds)
-        return DictSpec(**kwds)
+    @staticmethod
+    def _dict_schema_to_sequences(schema: DictSchema):
+        value_key_specs = []
+        type_key_specs = []
+        for key, spec in schema.items():
+            try:
+                type_key = canonicalize_base_type(key)
+                type_key_specs.append((type_key, spec))
+            except BadSchemaError:
+                value_key_specs.append((key, spec))
+        return value_key_specs, type_key_specs
 
     def type_name(self) -> str:
-        return 'dict'
+        return self.name
 
     def _check_value_type(self, mapping):
-        if not isinstance(mapping, dict):
-            raise InvalidValueNoTypeMatch('Must be dict')
+        if not isinstance(mapping, abc.Mapping):
+            raise InvalidValueNoTypeMatch('Must be mapping/dict')
 
-        failure_messages = []
-        unhandled_keys = set(mapping.keys())
-        c_mapping = {}
+        return self._DictSpecValueChecker(mapping).check_dict_spec(self)
 
-        # check for exact key matches
-        for key, spec in self.value_key_specs:
-            try:
-                unhandled_keys.remove(key)
-                value = mapping[key]
-                c_mapping[key] = check_value_base_type(spec, value)
-            except KeyError:
-                if isinstance(spec, Spec) and spec.optional:
-                    d_value = spec.default()
-                    c_mapping[key] = spec.check_value(d_value)
-                else:
-                    failure_messages.append(f'Missing required mapping key {repr(key)}')
-            except InvalidValueError as e:
-                failure_messages.append(f'Invalid value for key {repr(key)}: {str(e)}')
+    class _DictSpecValueChecker:
+        def __init__(self, mapping):
+            self.mapping = mapping
+            self.c_mapping = {}
+            self.failure_messages = []
+            self.unhandled_keys = set(mapping.keys())
 
-        # check for key type matches
-        if unhandled_keys and self.type_key_specs:
-            for key in list(unhandled_keys):
-                value = mapping[key]
+        def _check_dict_spec_value(self, spec, value):
+            if isinstance(spec, ConditionalDictSpec):
+                return spec.check_value(self, value)
+            else:
+                return check_value_base_type(spec, value)
+
+        def _check_value_key_specs(self, dict_spec):
+            for key, spec in dict_spec.value_key_specs:
                 try:
-                    c_key, c_value = check_type_key_spec(self.type_key_specs, key, value)
-                    unhandled_keys.remove(key)
-                    c_mapping[c_key] = c_value
-                except InvalidValueNoTypeMatch:
-                    pass
+                    self.unhandled_keys.remove(key)
+                    value = mapping[key]
+                    self.c_mapping[key] = self._check_dict_spec_value(spec, value)
+                except KeyError:
+                    if isinstance(spec, Spec) and spec.optional:
+                        d_value = spec.default()
+                        self.c_mapping[key] = spec.check_value(d_value)
+                    elif isinstance(spec, ConditionalDictSpec) and spec.optional:
+                        self.c_mapping[key] = spec.default(self)
+                    else:
+                        failure_messages.append(f'Missing required mapping key {key!r}')
                 except InvalidValueError as e:
-                    failure_messages.append(str(e))
-                    unhandled_keys.remove(key)
+                    failure_messages.append(f'Invalid value for key {key!r}: {e}')
 
-        if unhandled_keys:
-            unhandled_keys = ", ".join([repr(key) for key in unhandled_keys])
-            failure_messages.append(f'Keys {unhandled_keys} are unhandled; valid keys {self._keys_must_be}')
+        def _check_type_key_spec(self, dict_spec, key, value):
+            for type_key, spec in dict_spec.type_key_specs:
+                try:
+                    c_key = check_value_base_type(type_key, key)
+                except InvalidValueError:
+                    continue
+                try:
+                    c_value = self._check_dict_spec_value(spec, value)
+                    return c_key, c_value
+                except InvalidValueError as e:
+                    raise InvalidValueError(f'Value for key {key!r} does not conform with spec: {e}')
+            raise InvalidValueNoTypeMatch('No match for dict type keys')
 
-        if failure_messages:
-            raise InvalidValueError('Does not conform with dict schema', failure_messages)
+        def _check_type_key_specs(self, dict_spec):
+            if self.unhandled_keys and dict_spec.type_key_specs:
+                for key in list(self.unhandled_keys):
+                    value = self.mapping[key]
+                    try:
+                        c_key, c_value = self._check_type_key_spec(dict_spec, key, value)
+                        self.unhandled_keys.remove(key)
+                        self.c_mapping[c_key] = c_value
+                    except InvalidValueNoTypeMatch:
+                        pass
+                    except InvalidValueError as e:
+                        self.failure_messages.append(str(e))
+                        self.unhandled_keys.remove(key)
 
-        # handle any references
-        failure_messages = []
-        if self.references:
-            for key, ref_spec in self.references:
+        def _check_references(self, dict_spec):
+            for key, ref_spec in dict_spec.references:
                 try:
                     value = c_mapping[key]
-                    c_mapping[key] = ref_spec.evaluate(c_mapping, value)
+                    self.c_mapping[key] = ref_spec.evaluate(self.c_mapping, value)
                 except InvalidValueError as e:
-                    failure_messages.append(str(e))
+                    self.failure_messages.append(str(e))
+            if self.failure_messages:
+                raise InvalidValueError('Does not conform with reference spec', self.failure_messages)
 
-        if failure_messages:
-            raise InvalidValueError('Does not comply with dict reference spec', failure_messages)
+        @staticmethod
+        def _add_keys(all_keys, key_specs):
+            for key, _ in key_specs
+                try:
+                    hash(key)
+                    all_keys.append(key)
+                except TypeError:
+                    raise BadSchemaError(f'DictSpec key {key!r} is not Hashable')
 
-        return c_mapping
+        def check_dict_spec(self, dict_spec: DictSpec, unhandled_ok: bool = False):
+            self._check_value_key_specs(dict_spec)
+            self._check_type_key_specs(dict_spec)
+
+            if not unhandled_ok and self.unhandled_keys:
+                unhandled_keys = repr_seq_str(self.unhandled_keys)
+                all_keys = []
+                self._add_keys(all_keys, dict_spec.value_key_specs)
+                self._add_keys(all_keys, dict_spec.type_key_specs)
+                keys_must_be = must_be_msg(all_keys)
+                self.failure_messages.append(f'Keys {unhandled_keys} are unhandled; valid keys {keys_must_be}')
+
+            if self.failure_messages:
+                raise InvalidValueError('Does not conform with dict schema', self.failure_messages)
+
+            self._check_references(dict_spec)
+
+            return self.c_mapping
