@@ -1,40 +1,68 @@
-from typing import Callable, Iterable, Any, Optional
+"""User-facing utility functions"""
+from __future__ import annotations
+from typing import Any
+
+from .base import (
+    SimpleType,
+    Type,
+    TypeSpec,
+    IterSpec,
+)
+from .spec import Constraint
+
+# "generics"
 
 
-def repr_seq_str(seq: Iterable[Any], delim: str = ', ', key: Callable[[Any], Any] = lambda i: i):
-    return delim.join(repr(key(i)) for i in seq)
+def list_or_single(t: SimpleType) -> TypeSpec:
+    return TypeSpec((IterSpec(t), Type(t, lambda v: [v])))
 
 
-def indent_msg_lines(messages: Iterable[str]):
-    indented_lines = []
-    for m in messages:
-        indented_lines.append('\n   '.join(m.split('\n')))
-    return indented_lines
+# constraint factories
 
 
-class InvalidValueError(Exception):
-    """Base exception for any value that fails to validate or canonicalize"""
-    def __init__(self, msg: str, messages: Optional[Iterable[str]] = None):
-        if messages:
-            self.messages = messages
-            msg = msg + ':\n-- ' + '\n-- '.join(indent_msg_lines(messages))
-        else:
-            self.messages = [msg]
-        self.message = msg
-        self.error_count = len(self.messages)
-        Exception.__init__(self, msg)
-
-    def __str__(self):
-        return self.message
+def minlen(length: int) -> Constraint:
+    def check_length(value: Any) -> bool:
+        return len(value) >= length
+    return check_length, f'Must have length >= {length}'
 
 
-class InvalidValueNoTypeMatch(InvalidValueError):
-    """Exception for when there is explicitly no type match -- mostly used internally
-
-    Users will typically only need to catch `InvalidValueError` (base of this class) and look at the message
-    """
-    pass
+def maxlen(length: int) -> Constraint:
+    def check_length(value: Any) -> bool:
+        return len(value) <= length
+    return check_length, f'Must have length <= {length}'
 
 
-class BadSchemaError(Exception):
-    pass
+def range_len(min_len: int, max_len: int) -> Constraint:
+    def check_length(value: Any) -> bool:
+        return min_len <= len(value) <= max_len
+    return check_length, f'Must have length between {min_len}-{max_len}'
+
+
+def exact_len(length: int) -> Constraint:
+    def check_length(value: Any) -> bool:
+        return len(value) == length
+    return check_length, f'Must have exact length {length}'
+
+
+def contains(test_value: Any) -> Constraint:
+    def check_contains(value: Any) -> bool:
+        return test_value in value
+    return check_contains, f'Must contain {test_value!r}'
+
+
+def min_value(min_val: Any) -> Constraint:
+    def check_value(value: Any) -> bool:
+        return value >= min_val
+    return check_value, f'Must be >= {min_val!r}'
+
+
+def max_value(max_val: Any) -> Constraint:
+    def check_value(value: Any) -> bool:
+        return value <= max_val
+    return check_value, f'Must be <= {max_val!r}'
+
+
+def range_value(min_val: Any, max_val: Any) -> Constraint:
+    def check_value(value: Any) -> bool:
+        return min_val <= value <= max_val
+    return check_value, f'Must be between {min_val!r}-{max_val!r}'
