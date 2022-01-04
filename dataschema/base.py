@@ -1,7 +1,9 @@
 from __future__ import annotations
+
+from abc import ABC
 from typing import Optional, Any, Union, Callable, Sequence, Tuple
 
-from ._utils import InvalidValueError
+from ._utils import InvalidValueError, BadSchemaError
 
 Validator = Callable[[Any], bool]
 
@@ -32,7 +34,7 @@ def canonicalize_constraints(constraints: Constraints) -> Tuple[Constraint, ...]
 
 
 class Spec:
-    """Abstract base class for schema elements"""
+    """Abstract base class for all Spec / schema elements"""
     _hash_props: Tuple[str] = ()
 
     def __init__(self,
@@ -85,12 +87,20 @@ class Spec:
         return self._hash
 
     def default(self) -> Any:
+        """Get the default value.
+
+        Either returns the `default` constructor argument, or calls and reutnrs it if it's `callable()`
+        """
         if callable(self._default):
             return self._default()
         else:
             return self._default
 
     def check_constraints(self, value: Any) -> None:
+        """Check the passed value against any constraints passed to this Spec
+
+        Raises an `InvalidValueError` if invalid, otherwise returns None.
+        """
         if not self._constraints:
             return
         if self._is_unset(value) and self.optional:
@@ -107,6 +117,13 @@ class Spec:
                 raise InvalidValueError('Does not meet value constraints', failure_messages)
 
     def check_value(self, value: Any) -> Any:
+        """Validate that a value conforms with the entire Spec. The primary interface to a schema.
+
+        If valid, returns a canonicalized version of the value (for example, an `IterSpec` will
+        return a list for any iterable passed to `check_value`).
+
+        If invalid, raises an InvalidValueError.
+        """
         if self._is_unset(value) and self.optional:
             value = self.default()
         c_value = self._check_value(value)
@@ -149,8 +166,8 @@ _canonicalization_invalidating_exceptions = (ValueError, TypeError, AttributeErr
 Canonicalize = Optional[Callable[[Any], Any]]
 
 
-class Canonicalizable(Spec):
-    """Abstract base clase for Spec that can be canonicalized"""
+class Canonicalizable(Spec, ABC):
+    """Abstract base class for Spec that can be canonicalized"""
     _canonicalization_invalid_exception: Exception = InvalidValueError
 
     def __init__(self,
@@ -161,7 +178,7 @@ class Canonicalizable(Spec):
                  constraints: Constraints = None):
         """
         ---
-        canonicalize: A function that transforms the identified value of the subclass instance into another value or type
+        canonicalize: Callable that transforms the identified value of the subclass instance into another value or type
         """
         self._canonicalize = canonicalize
         Spec.__init__(self, optional, default, is_unset, constraints)

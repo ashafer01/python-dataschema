@@ -1,5 +1,5 @@
-from .spec import Spec
-from .base import (
+from .base import Spec
+from .specs import (
     Type,
     CType,
     EnumSpec,

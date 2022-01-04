@@ -2,13 +2,13 @@
 from __future__ import annotations
 from typing import Any
 
-from .base import (
+from .specs import (
     SimpleType,
     Type,
     TypeSpec,
     IterSpec,
 )
-from .spec import Constraint
+from .base import Constraint
 
 # "generics"
 

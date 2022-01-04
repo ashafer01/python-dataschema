@@ -12,18 +12,16 @@ from typing import (
     Hashable,
     Iterable,
     Sequence,
-    Collection,
     Mapping,
 )
 
 from ._utils import (
     repr_seq_str,
-    indent_msg_lines,
     InvalidValueError,
     InvalidValueNoTypeMatch,
     BadSchemaError,
 )
-from .spec import (
+from .base import (
     Spec,
     Canonicalizable,
     Validator,
@@ -171,10 +169,17 @@ class CType(Type):
     `CType` is just like `Type`, with the exception being with canonicalization and type identity.
 
     A value identifies as a `Type` by being an instance of or identical to it's wrapped type. If a `Type` has a
-    `canonicalize` function, and it fails to canonicalize, it is considered an invalud value _of that Type_.
+    `canonicalize` function, and it fails to canonicalize, it is considered an invalid value _of that Type_.
 
     With a `CType`, the value _only identifies as the type_ if it meets the identity criteria for `Type` _as well as_
     being able to successfully canonicalize.
+
+    This creates significant effect in the handling of, for example, TypeSpec.
+
+    TypeSpec((Type(str, int), EnumSpec('foo', 'bar')) would find the check value of 'foo' to be invalid, because it
+    would first identify as a Type(str, ...) and then be considered invalid because it cannot be canonicalized with
+    int(), thereby invalidating the TypeSpec before the EnumSpec is checked. Using CType(str, int) would prevent
+    this because 'foo' would not identify as the Type.
     """
     _canonicalization_invalid_exception: Exception = InvalidValueNoTypeMatch
 
@@ -414,13 +419,14 @@ class ConditionalDictSpec:
                 raise BadSchemaError('value_condition_spec values must be DictSpec instances')
             if dict_spec.type_key_specs:
                 type_keys = repr_seq_str(dict_spec.type_key_specs, key=lambda i: i[0])
-                raise BadSchemaError('type keys {type_keys} are not allowed in ConditionalDictSpec sub-Specs')
+                raise BadSchemaError(f'type keys {type_keys} are not allowed in ConditionalDictSpec sub-Specs')
             value_condition_specs[key] = dict_spec
         if apply_default_spec:
             try:
                 self.default_spec = value_condition_specs[default]
             except KeyError:
-                raise BadSchemaError(f'default={default!r} does not exist in value_condition_specs and apply_default_spec=True')
+                raise BadSchemaError(f'default={default!r} does not exist in value_condition_specs '
+                                     f'and apply_default_spec=True')
         else:
             self.default_spec = None
         self.value_condition_specs = value_condition_specs
@@ -445,7 +451,7 @@ class ConditionalDictSpec:
 
     def check_value(self, checker, value):
         try:
-            value_spec = self.value_condition_spec[value]
+            value_spec = self.value_condition_specs[value]
             checker.check_dict_spec(value_spec, unhandled_ok=True)
             return value
         except KeyError:
@@ -589,7 +595,7 @@ class DictSpec(Spec):
             for key, spec in dict_spec.value_key_specs:
                 try:
                     self.unhandled_keys.remove(key)
-                    value = mapping[key]
+                    value = self.mapping[key]
                     self.c_mapping[key] = self._check_dict_spec_value(spec, value)
                 except KeyError:
                     if isinstance(spec, Spec) and spec.optional:
@@ -598,9 +604,9 @@ class DictSpec(Spec):
                     elif isinstance(spec, ConditionalDictSpec) and spec.optional:
                         self.c_mapping[key] = spec.default(self)
                     else:
-                        failure_messages.append(f'Missing required mapping key {key!r}')
+                        self.failure_messages.append(f'Missing required mapping key {key!r}')
                 except InvalidValueError as e:
-                    failure_messages.append(f'Invalid value for key {key!r}: {e}')
+                    self.failure_messages.append(f'Invalid value for key {key!r}: {e}')
 
         def _check_type_key_spec(self, dict_spec, key, value):
             for type_key, spec in dict_spec.type_key_specs:
@@ -628,16 +634,6 @@ class DictSpec(Spec):
                     except InvalidValueError as e:
                         self.failure_messages.append(str(e))
                         self.unhandled_keys.remove(key)
-
-        def _check_references(self, dict_spec: DictSpec):
-            for key, ref_spec in dict_spec.references:
-                try:
-                    value = self.c_mapping[key]
-                    self.c_mapping[key] = ref_spec.evaluate(self.c_mapping, value)
-                except InvalidValueError as e:
-                    self.failure_messages.append(str(e))
-            if self.failure_messages:
-                raise InvalidValueError('Does not conform with reference spec', self.failure_messages)
 
         def _post_processing(self, dict_spec: DictSpec):
             for post in dict_spec.post:
