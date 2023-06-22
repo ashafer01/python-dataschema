@@ -305,10 +305,33 @@ class SeqSpec(Spec):
                  optional: bool = False,
                  default: Any = list,
                  is_unset: Validator = simple_is_unset,
-                 constraints: Constraints = None):
+                 constraints: Constraints = None,
+                 auto_optional: bool = False):
         self.type_sequence = type_sequence
         self.c_type = c_type
+
+        if auto_optional:
+            if optional or default is not list:
+                raise BadSchemaError('cannot pass auto_optional=True with optional or default')
+            if not type_sequence:
+                raise BadSchemaError('cannot pass auto_optional=True with empty type_sequence')
+            auto_default = self._auto_optional()
+            if auto_default:
+                optional = True
+                default = auto_default
+
         Spec.__init__(self, optional, default, is_unset, constraints)
+
+    def _auto_optional(self):
+        default_seq = []
+        for spec in self.type_sequence:
+            if isinstance(spec, Spec) and spec.optional:
+                d_value = spec.default()
+                default_seq.append(spec.check_value(d_value))
+            else:
+                default_seq.clear()
+                break
+        return self.c_type(default_seq)
 
     def type_name(self):
         return 'sequence(' + ', '.join(get_types_names(self.type_sequence)) + ')'
@@ -496,7 +519,8 @@ class DictSpec(Spec):
                  optional: bool = False,
                  default: Any = dict,
                  is_unset: Validator = simple_is_unset,
-                 constraints: Constraints = None):
+                 constraints: Constraints = None,
+                 auto_optional: bool = False):
         """
         ---
         schema: |
@@ -533,6 +557,9 @@ class DictSpec(Spec):
             details.
         name: A string containing a canonical name for this `DictSpec`. Primarily used in error messages.
         unhandled_ok: Set to True to consider the dict valid if it contains unhandled keys after processing the schema
+        auto_optional: |
+            Set to True to make the `DictSpec` optional if all value keys are optional or if there are only
+            type keys, and auto-generate a default dict where all value keys are set to their default value.
         """
 
         if schema:
@@ -555,7 +582,32 @@ class DictSpec(Spec):
             self.post = tuple(post)
         self.name = name
         self.unhandled_ok = unhandled_ok
+
+        if auto_optional:
+            if optional or default is not dict:
+                raise BadSchemaError('cannot pass auto_optional=True with optional or default')
+            if self.value_key_specs:
+                auto_default = self._auto_optional()
+                if auto_default:
+                    optional = True
+                    default = auto_default
+            elif self.type_key_specs:
+                optional = True
+            else:
+                raise BadSchemaError('cannot pass auto_optional=True with empty schema/value_key_specs/type_key_specs')
+
         Spec.__init__(self, optional, default, is_unset, constraints)
+
+    def _auto_optional(self):
+        default_dict = {}
+        for value_key, spec in self.value_key_specs:
+            if isinstance(spec, Spec) and spec.optional:
+                d_value = spec.default()
+                default_dict[value_key] = spec.check_value(d_value)
+            else:
+                default_dict.clear()
+                break
+        return default_dict
 
     @staticmethod
     def _dict_schema_to_sequences(schema: DictSchema):

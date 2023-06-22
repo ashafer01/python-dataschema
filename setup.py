@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='python-dataschema',
-    version='0.1.4',
+    version='0.1.5',
     author='Alex Shafer',
     author_email='ashafer@pm.me',
     url='https://github.com/ashafer01/python-dataschema',
