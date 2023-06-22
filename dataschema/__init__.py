@@ -11,6 +11,8 @@ from .specs import (
     Post,
     Update,
     Test,
+    InvalidValueError,
+    BadSchemaError,
 )
 
 __all__ = (
@@ -26,4 +28,6 @@ __all__ = (
     'Post',
     'Update',
     'Test',
+    'InvalidValueError',
+    'BadSchemaError',
 )
