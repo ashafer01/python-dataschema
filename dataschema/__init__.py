@@ -1,4 +1,4 @@
-from .base import Spec
+from .base import Spec, Constraint
 from .specs import (
     Type,
     CType,
@@ -17,6 +17,7 @@ from .specs import (
 
 __all__ = (
     'Spec',
+    'Constraint',
     'Type',
     'CType',
     'EnumSpec',

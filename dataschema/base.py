@@ -7,8 +7,31 @@ from ._utils import InvalidValueError, BadSchemaError
 
 Validator = Callable[[Any], bool]
 
-Constraint = Tuple[Validator, str]
-Constraints = Optional[Union[Constraint, Sequence[Constraint]]]
+
+class Constraint:
+    """
+    A generic constraint based on a callable that returns a True value if the constraint is met.
+    """
+    def __init__(self,
+                 test: Validator,
+                 message: str):
+        """
+        ---
+        test: A callable which returns a False value if the constraint is not met
+        message: The message to put in an `InvalidValueError` if the constraint is not met
+        """
+        self.test = test
+        self.message = message
+
+    def evaluate(self, value):
+        result = self.test(value)
+        if not result:
+            raise InvalidValueError(self.message)
+
+
+ConstraintTuple = Tuple[Validator, str]
+_Constraint = Union[Constraint, ConstraintTuple]
+Constraints = Optional[Union[_Constraint, Sequence[_Constraint]]]
 
 # types that can routinely be explicitly set to a false value and be meaningfully
 # different from empty/unset in the context of "data"
@@ -28,9 +51,25 @@ def default_is_unset(value: Any) -> bool:
 def canonicalize_constraints(constraints: Constraints) -> Tuple[Constraint, ...]:
     if not constraints:
         return tuple()
-    if not isinstance(constraints[0], tuple):
-        constraints = (constraints,)
-    return constraints
+    if isinstance(constraints, Constraint):
+        return (constraints,)
+    try:
+        if not isinstance(constraints[0], (tuple, Constraint)):
+            return (Constraint(*constraints),)
+    except TypeError:
+        raise BadSchemaError('single constraint must be Constraint or tuple[Validator, str]')
+    try:
+        result = []
+        for constraint in constraints:
+            if isinstance(constraint, Constraint):
+                result.append(constraint)
+            elif isintance(constraint, tuple):
+                result.append(Constraint(*constraint))
+            else:
+                raise BadSchemaError('elements of constraints must be tuple or Constraint')
+        return tuple(result)
+    except TypeError:
+        raise BadSchemaError('constraints must be iterable')
 
 
 class Spec:
@@ -44,20 +83,14 @@ class Spec:
                  constraints: Constraints = None):
         """
         ---
-        optional: Set to True to mark this Type as optional
+        optional: Set to True to mark this Spec as optional
         default: |
             * A value to return if the `is_unset` function returns True, OR
             * A callable (as determined by the `callable()` builtin) which returns the value to use as default
         is_unset: |
             A function accepting a value under validation, and returning True if the value is considered unset, and
             therefore that the `default` should be returned instead of attempting to validate the value
-        constraints: |
-            A single Constraint is a 2-tuple, where:
-
-            * the first element is a callable, accepting a single value under validation, and returning a bool
-            * if the first element returns False during validation, the 2nd element will be used as a failure message
-
-            The `constraints` argument may either be a single Constraint or a sequence of Constraint.
+        constraints: A single `Constraint` or an iterable of `Constraint`
         """
         self.optional = optional
         self._default = default
@@ -106,13 +139,14 @@ class Spec:
         if self._is_unset(value) and self.optional:
             return
         failure_messages = []
-        for c, message in self._constraints:
-            result = c(value)
-            if not result:
-                failure_messages.append(f'Constraint not met (return={result!r}): {message}')
+        for constraint in self._constraints:
+            try:
+                constraint.evaluate(value)
+            except InvalidValueError as e:
+                failure_messages.append(str(e))
         if failure_messages:
             if len(self._constraints) == 1:
-                raise InvalidValueError(failure_messages[0])
+                raise InvalidValueError(f'Does not meet value constraint: {failure_messages[0]}')
             else:
                 raise InvalidValueError('Does not meet value constraints', failure_messages)
 
@@ -161,7 +195,6 @@ class Spec:
 # These get converted to an InvalidValueError when caught during canonicalization
 # All other exceptions will immediately propagate, including InvalidValueError
 _canonicalization_invalidating_exceptions = (ValueError, TypeError, AttributeError, KeyError)
-
 
 Canonicalize = Optional[Callable[[Any], Any]]
 

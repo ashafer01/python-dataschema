@@ -174,12 +174,12 @@ class CType(Type):
     With a `CType`, the value _only identifies as the type_ if it meets the identity criteria for `Type` _as well as_
     being able to successfully canonicalize.
 
-    This creates significant effect in the handling of, for example, TypeSpec.
+    This creates significant effect in the handling of, for example, `TypeSpec`.
 
-    TypeSpec((Type(str, int), EnumSpec('foo', 'bar')) would find the check value of 'foo' to be invalid, because it
-    would first identify as a Type(str, ...) and then be considered invalid because it cannot be canonicalized with
-    int(), thereby invalidating the TypeSpec before the EnumSpec is checked. Using CType(str, int) would prevent
-    this because 'foo' would not identify as the Type.
+    `TypeSpec((Type(str, int), EnumSpec(('foo', 'bar')))` would find the check value of 'foo' to be invalid, because it
+    would first identify as a `Type(str, ...)` and then be considered invalid because it cannot be canonicalized with
+    `int()`, thereby invalidating the `TypeSpec` before the `EnumSpec` is checked. Using `CType(str, int)` would prevent
+    this because `'foo'` would not identify as the CType.
     """
     _canonicalization_invalid_exception: Exception = InvalidValueNoTypeMatch
 
@@ -199,6 +199,10 @@ class EnumSpec(Canonicalizable):
                  optional: bool = False,
                  is_unset: Validator = simple_is_unset,
                  default: Any = None):
+        """
+        ---
+        values: An iterable of allowed values
+        """
         if optional and None not in values:
             values = [*values, None]
         optional = None in values
@@ -363,6 +367,10 @@ RefTest = Callable[..., bool]
 
 
 class Post:
+    """
+    ABC for a post-processing object which takes additional action against a type-valid dict under
+    validation by a `DictSpec`.
+    """
     def __init__(self, ref_keys: RefKeys):
         if not ref_keys:
             raise BadSchemaError('At least one reference key must be specified for Update/Post')
@@ -397,9 +405,27 @@ def default_gate(*_) -> bool:
 
 
 class Update(Post):
+    """
+    Post-processing object that optionally updates a value in a type-valid dict under validation
+    by a `DictSpec`.
+    """
     def __init__(self, *ref_keys,
                  update: RefUpdate,
                  gate: RefTest = default_gate):
+        """
+        ---
+        ref_keys: |
+            Positional arguments are keys to reference from the type-valid dict under validation.
+            The first one may potentially be updated, and the others may be used to determine the
+            new value.
+        update: |
+            A callable which returns the new value for the first reference key. The type-valid values
+            of all reference keys are passed in order.
+        gate: |
+            An optional callable which returns a False value if the update should not be performed. The
+            type-valid values of all reference keys are passed in order. Defaults to a callable which
+            always returns True.
+        """
         Post.__init__(self, ref_keys)
         self.update = update
         self.gate = gate
@@ -412,9 +438,23 @@ class Update(Post):
 
 
 class Test(Post):
+    """
+    Post-processing object that requires an additional generic test passes on a type-valid value under
+    validation by a `DictSpec`.
+    """
     def __init__(self, *ref_keys,
                  test: RefTest,
                  message: str):
+        """
+        ---
+        ref_keys: |
+            Positional arguments are keys to reference from the type-valid dict under validation.
+        test: |
+            A callable which returns a True value if the test has passed. The type-valid values of
+            all reference keys are passed in order.
+        message: |
+            The message for the `InvalidValueError` which is raised if the test does not pass.
+        """
         Post.__init__(self, ref_keys)
         self.test = test
         self.message = message
@@ -427,22 +467,88 @@ class Test(Post):
 
 
 class ConditionalDictSpec:
+    """
+    To be used as a value in a `DictSpec`, if a value for a key in the `DictSpec` matches a key in
+    the `ConditionalDictSpec`, then validate the dict under validation against the correlated
+    `DictSpec` value.
+
+    Example:
+    ```
+    typed_object = DictSpec({
+        'type': ConditionalDictSpec({
+            'person': DictSpec({
+                'given_name': str,
+                'family_name: str,
+            }),
+            'car': DictSpec({
+                'make': str,
+                'model': str,
+                'year': int,
+            }),
+            'city': DictSpec({
+                'name': str,
+                'state': str,
+                'country': str,
+                'population': Type(int, optional=True, default=-1),
+            }),
+        }),
+    })
+
+    # valid values
+    typed_object.check_value({
+        'type': 'car',
+        'make': 'Nissan',
+        'model': 'Leaf',
+        'year': 2022,
+    })
+    typed_object.check_value({
+        'city': 'San Jose',
+        'state': 'California',
+        'country': 'US',
+    })
+
+    # invalid values
+    typed_object.check_value({'name': 'Test'})  # type is required
+    typed_object.check_value({
+        'type': 'car',
+        'name': 'Test',
+    })  # name is not allowed with type=="car"
+    typed_object.check_value({'type': 'animal'})  # "animal" is not a valid type
+    ```
+    """
     value_condition_specs: Dict[Hashable, DictSpec] = {}
     apply_default_spec: bool = False
     optional: bool = False
 
     def __init__(self,
-                 value_condition_specs: Mapping[Hashable, Union[Mapping, DictSpec]],
+                 value_condition_specs: Mapping[Hashable, Optional[Union[Mapping, DictSpec]]],
                  optional: bool = False,
                  default: Any = None,
                  apply_default_spec: bool = False):
+        """
+        ---
+        value_condition_specs: |
+            A mapping where keys are valid values for the key in the outer `DictSpec` key for which this
+            ConditionalDictSpec is a value. For matching keys, the value `DictSpec` is used to validate
+            the dict under validation (see example).
+
+            * Values may also be None if there is no additional validation required for a particular key.
+            * Note that inner `DictSpec` may not contain any type keys.
+        optional: Mark the key in the outer `DictSpec` as optional
+        default: The default key in value_condition_specs.
+        apply_default_spec: |
+            Set to True to validate the dict under validation against the `DictSpec` for the default
+            value. If this is False (the default), the key is set to the default if unset, and the
+            corresponding inner `DictSpec` is ignored.
+        """
         for key, dict_spec in value_condition_specs.items():
-            dict_spec = canonicalize_base_type(dict_spec)
-            if not isinstance(dict_spec, DictSpec):
-                raise BadSchemaError('value_condition_spec values must be DictSpec instances')
-            if dict_spec.type_key_specs:
-                type_keys = repr_seq_str(dict_spec.type_key_specs, key=lambda i: i[0])
-                raise BadSchemaError(f'type keys {type_keys} are not allowed in ConditionalDictSpec sub-Specs')
+            if dict_spec is not None:
+                dict_spec = canonicalize_base_type(dict_spec)
+                if not isinstance(dict_spec, DictSpec):
+                    raise BadSchemaError('value_condition_spec values must be DictSpec instances')
+                if dict_spec.type_key_specs:
+                    type_keys = repr_seq_str(dict_spec.type_key_specs, key=lambda i: i[0])
+                    raise BadSchemaError(f'type keys {type_keys} are not allowed in ConditionalDictSpec sub-Specs')
             value_condition_specs[key] = dict_spec
         if apply_default_spec:
             try:
@@ -456,26 +562,17 @@ class ConditionalDictSpec:
         self.apply_default_spec = apply_default_spec
         self.optional = optional
         self._default = default
-        self._hash = hash((
-            ConditionalDictSpec,
-            tuple(value_condition_specs.items()),
-            apply_default_spec,
-            optional,
-            default,
-        ))
-
-    def __hash__(self):
-        return self._hash
 
     def default(self, checker):
-        if self.apply_default_spec:
+        if self.apply_default_spec and self.default_spec:
             checker.check_dict_spec(self.default_spec, unhandled_ok=True)
         return self._default
 
     def check_value(self, checker, value):
         try:
             value_spec = self.value_condition_specs[value]
-            checker.check_dict_spec(value_spec, unhandled_ok=True)
+            if value_spec:
+                checker.check_dict_spec(value_spec, unhandled_ok=True)
             return value
         except KeyError:
             raise InvalidValueError(must_be_msg(tuple(self.value_condition_specs.keys())))
@@ -524,7 +621,7 @@ class DictSpec(Spec):
         """
         ---
         schema: |
-            This is mainly a convenience parameter to allow defining the DictSpec using a dict, such that the spec looks
+            This is mainly a convenience parameter to allow defining the `DictSpec` using a dict, such that the spec looks
             a lot like a valid value. Keys may either be specific values (see `value_key_specs`) as well as types
             or Specs (see `type_key_specs`). Values must always be a type or Spec.
         value_key_specs: |
